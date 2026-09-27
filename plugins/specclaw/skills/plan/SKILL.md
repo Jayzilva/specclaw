@@ -86,7 +86,8 @@ Skip all of this when the proposal has neither section, which is the normal case
 7. Update status: `specclaw-update-status .specclaw`.
 8. **GitHub sync** (if enabled): `specclaw-gh-sync update .specclaw <change>` to attach the task checklist to the GitHub Issue.
 9. **Azure Boards sync** (if `azdo.boards.sync: true`): `specclaw-azdo-issue update .specclaw <change>` to refresh the Work Item description with the rendered task checklist.
-10. **Release the concurrency lock:** `specclaw-change-lock .specclaw release <change> || true` — always, on every path that reaches this point (single-shot or `--author-spec`), and best-effort: a release failure must never be reported as a plan failure.
+10. **Jira sync** (if `jira.enabled: true`): `specclaw-jira-issue update .specclaw <change>` to refresh the issue description with the rendered task checklist, then `specclaw-jira-issue transition .specclaw <change> plan` to move the card out of the backlog. The transition warns and continues when the project workflow has no matching status.
+11. **Release the concurrency lock:** `specclaw-change-lock .specclaw release <change> || true` — always, on every path that reaches this point (single-shot or `--author-spec`), and best-effort: a release failure must never be reported as a plan failure.
 
 ## Planner guardrails
 

@@ -22,6 +22,8 @@ Returns JSON config with `parallel_tasks`, `models.coding`, `git.strategy`, `not
 
 **Worktree strategy:** when `git.strategy: worktree-per-change`, setup creates an isolated worktree at `.specclaw/worktrees/<change>/`. Use the `worktree_path` from the JSON as the working directory when spawning coding agents.
 
+**Jira sync** (if `jira.enabled: true`): `specclaw-jira-issue transition .specclaw <change> build` so the card moves to In Progress as the build starts, rather than sitting in the backlog until archive.
+
 Send a **build started** notification:
 
 ```
@@ -190,9 +192,11 @@ every 60s is never "no reply for 13 min" — which is the teardown this exists t
    5. Mark dependent tasks in later waves as skipped/failed.
    6. **GitHub sync** (if enabled): `specclaw-gh-sync comment .specclaw <change> "❌ Task <TASK_ID> failed: <summary>"`.
    7. **Azure Boards sync** (if `azdo.boards.sync: true`): `specclaw-azdo-issue comment .specclaw <change> "❌ Task <TASK_ID> failed: <summary>"`.
+   8. **Jira sync** (if `jira.enabled: true`): `specclaw-jira-issue comment .specclaw <change> "❌ Task <TASK_ID> failed: <summary>"`.
 
 **g.** GitHub sync (if enabled): `specclaw-gh-sync update .specclaw <change>` to refresh task checkboxes.
 **g'.** Azure Boards sync (if `azdo.boards.sync: true`): `specclaw-azdo-issue update .specclaw <change>` to refresh the Work Item description with the latest task checklist; optionally `specclaw-azdo-issue comment .specclaw <change> "Wave <N> complete: <X>/<total> tasks done"`.
+**g''.** Jira sync (if `jira.enabled: true`): `specclaw-jira-issue update .specclaw <change>` to refresh the issue description with the latest task checklist. The card is already In Progress from Step 1 — do not re-transition per wave.
 
 **h.** Repeat for the next wave.
 

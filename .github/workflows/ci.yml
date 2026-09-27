@@ -98,6 +98,8 @@ jobs:
         run: bash plugins/specclaw/tests/run-codex-skill-tests.sh
       - name: Run Codex plugin package tests
         run: bash plugins/specclaw/tests/run-codex-plugin-tests.sh
+      - name: Run Jira sync tests
+        run: bash plugins/specclaw/tests/run-jira-sync-tests.sh
       - name: Lint skill descriptions (no new offences)
         run: bash plugins/specclaw/tests/run-description-lint-tests.sh
 

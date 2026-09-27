@@ -136,6 +136,17 @@ Azure Boards (if `azdo.boards.sync: true`):
 specclaw-azdo-issue comment .specclaw <change> "Verify <verdict>: <verdict summary>"
 ```
 
+Jira (if `jira.enabled: true`):
+```bash
+specclaw-jira-issue comment .specclaw <change> "Verify <verdict>: <verdict summary>"
+```
+
+On a **PASS** only, also move the card to the review column:
+```bash
+specclaw-jira-issue transition .specclaw <change> verify
+```
+Leave a FAIL or PARTIAL where it is — the work is still in progress, and the comment above already records the verdict.
+
 ## Step 7 — Notify
 
 Send verification results via the configured notification channel.

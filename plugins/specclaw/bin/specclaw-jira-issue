@@ -1,15 +1,40 @@
 #!/usr/bin/env bash
-# specclaw-jira-issue — Create a Jira issue from a specclaw proposal
-# Usage: specclaw-jira-issue <specclaw_dir> <change_name>
+# specclaw-jira-issue — keep a Jira issue in step with a specclaw change
+# Usage: specclaw-jira-issue [create|update|comment|close] <specclaw_dir> <change_name> [args]
 set -euo pipefail
 
 usage() {
   cat <<'EOF'
-Usage: specclaw-jira-issue <specclaw_dir> <change_name>
+Usage:
+  specclaw-jira-issue [create]  <specclaw_dir> <change_name>
+  specclaw-jira-issue update    <specclaw_dir> <change_name>
+  specclaw-jira-issue comment   <specclaw_dir> <change_name> "<text>"
+  specclaw-jira-issue transition <specclaw_dir> <change_name> <plan|build|verify|done>
+  specclaw-jira-issue sprint    <specclaw_dir> <change_name>
+  specclaw-jira-issue close     <specclaw_dir> <change_name>
 
-Create a Jira issue from a specclaw change proposal. Requires:
+Keep a Jira issue in step with a specclaw change. Requires:
   - proposal.md (specclaw propose must have completed)
   - Jira auth configured (run: specclaw auth jira)
+
+Subcommands:
+  create    Create the issue from proposal.md, add it to the project's active
+            sprint (see 'sprint' below), and assign it to the account the API
+            token belongs to. Idempotent — warns and exits 0 if status.md
+            already records one. This is the default when no subcommand is
+            given, so the two-argument form keeps working.
+  update    Rewrite the description from proposal.md, spec.md and the current
+            task checklist.
+  comment   Add a comment to the issue.
+  transition Move the issue to the status this lifecycle phase implies, so the
+            card actually travels across the board. Discovers the project's own
+            transition names; warns and exits 0 when the workflow offers none.
+  sprint    Add the issue to the project's active sprint. A Scrum board only
+            renders issues that belong to the active sprint in its columns —
+            an issue with no sprint set stays parked under Backlog no matter
+            what its status is. Never fatal: no Scrum board, no active
+            sprint, or no Agile API access just warns and exits 0.
+  close     Shorthand for 'transition ... done'.
 
 Arguments:
   specclaw_dir   Path to the .specclaw directory
@@ -20,20 +45,31 @@ EOF
 
 [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]] && usage
 
+# The subcommand is optional and leading. Without one, the first argument is the
+# specclaw dir — so `specclaw-jira-issue <dir> <change>` still works and the
+# existing /specclaw:issue skill needs no change.
+SUBCMD="create"
+case "${1:-}" in
+  create|update|comment|transition|sprint|close) SUBCMD="$1"; shift ;;
+esac
+
 if [[ $# -lt 2 ]]; then
-  echo "ERROR: Expected 2 arguments: <specclaw_dir> <change_name>" >&2
+  echo "ERROR: Expected <specclaw_dir> <change_name>" >&2
   exit 1
 fi
 
 SPECCLAW_DIR="$1"
 CHANGE_NAME="$2"
+shift 2
+EXTRA_ARGS=("$@")
+
 CONFIG_FILE="$SPECCLAW_DIR/config.yaml"
 AUTH_FILE="$SPECCLAW_DIR/.env"
 CHANGE_DIR="$SPECCLAW_DIR/changes/$CHANGE_NAME"
+STATUS_FILE="$CHANGE_DIR/status.md"
 
 [[ -d "$SPECCLAW_DIR" ]] || { echo "ERROR: specclaw directory not found: $SPECCLAW_DIR" >&2; exit 1; }
 [[ -d "$CHANGE_DIR" ]]   || { echo "ERROR: change directory not found: $CHANGE_DIR" >&2; exit 1; }
-
 die() { echo "ERROR: $*" >&2; exit 1; }
 
 # ─── Load Auth ────────────────────────────────────────────────────────────────
@@ -99,18 +135,30 @@ fi
 
 # ─── Issue Content Builder ────────────────────────────────────────────────────
 
+# A board card wants a heading, not an explanation. The proposal's H1 IS that
+# heading, so prefer it over the first line of prose — which is the opening
+# sentence of the Problem section and reads as a paragraph on a card.
 build_issue_summary() {
   local proposal_file="$CHANGE_DIR/proposal.md"
-  local summary=""
+  local summary="" first_prose=""
   if [[ -f "$proposal_file" ]]; then
     while IFS= read -r line; do
       [[ -z "${line// /}" ]] && continue
+      # `# Proposal: Foo` and `# Foo` both yield `Foo`. The space after `#` is
+      # what keeps `## Problem` from matching here.
+      if [[ "$line" =~ ^#[[:space:]]+(.*) ]]; then
+        summary="${BASH_REMATCH[1]}"
+        summary="${summary#Proposal:}"
+        summary="${summary# }"
+        break
+      fi
       [[ "$line" =~ ^# ]]    && continue
       [[ "$line" =~ ^\*\* ]] && continue
-      summary="$line"; break
+      # No H1 in the file: fall back to the first prose line, as before.
+      first_prose="$line"; break
     done < "$proposal_file"
   fi
-  summary="${summary:-$CHANGE_NAME}"
+  summary="${summary:-${first_prose:-$CHANGE_NAME}}"
   summary="${summary//\*/}"; summary="${summary//\`/}"
   [[ ${#summary} -gt 255 ]] && summary="${summary:0:252}..."
   echo "$summary"
@@ -156,6 +204,13 @@ jiraapi_post() {
 }
 
 json_escape() {
+  # node first: on Windows `python3` is often the Microsoft Store stub, which
+  # exits 49 without reading stdin, and the sed fallback below leaves raw CR
+  # bytes inside the JSON string, which Jira rejects as malformed.
+  if command -v node >/dev/null 2>&1; then
+    node -e 'process.stdout.write(JSON.stringify(require("fs").readFileSync(0, "utf8")))'
+    return
+  fi
   python3 -c 'import sys,json; print(json.dumps(sys.stdin.read()))' 2>/dev/null || \
     sed 's/\\/\\\\/g; s/"/\\"/g; s/$/\\n/g' | tr -d '\n' | sed 's/\\n$//' | sed 's/^/"/; s/$/"/'
 }
@@ -168,6 +223,154 @@ build_adf_doc() {
     "$text_json"
 }
 
+# ─── Markdown → ADF ───────────────────────────────────────────────────────────
+
+# A Jira description is Atlassian Document Format, not text. Wrapping the whole
+# proposal in one paragraph node — which is what build_adf_doc does — makes
+# every heading, bullet and task checkbox arrive as literal characters in a
+# single wall of text. Descriptions get real ADF blocks instead; comments are
+# one line of prose and stay on build_adf_doc.
+#
+# Jira rejects a description past ~32k characters and ADF JSON inflates well
+# beyond its markdown source, so trim the source rather than letting the PUT
+# come back 400.
+ADF_SOURCE_LIMIT=24000
+
+adf_render_markdown() {
+  # shellcheck disable=SC2016  # the `$` below are regex anchors in JS, not shell expansions
+  node -e '
+const fs = require("fs");
+const LIMIT = parseInt(process.argv[1], 10) || 24000;
+let md = fs.readFileSync(0, "utf8").replace(/\r\n?/g, "\n");
+if (md.length > LIMIT) {
+  md = md.slice(0, LIMIT).replace(/\s+$/, "") +
+    "\n\n---\n\n_Truncated by specclaw — the full documents live in the change directory._";
+}
+
+const INLINE = /`([^`]+)`|\*\*([^*]+)\*\*|\[([^\]]+)\]\(([^)\s]+)\)/g;
+function inline(text) {
+  const nodes = []; let pos = 0, m;
+  INLINE.lastIndex = 0;
+  while ((m = INLINE.exec(text)) !== null) {
+    if (m.index > pos) nodes.push({ type: "text", text: text.slice(pos, m.index) });
+    if (m[1] !== undefined)      nodes.push({ type: "text", text: m[1], marks: [{ type: "code" }] });
+    else if (m[2] !== undefined) nodes.push({ type: "text", text: m[2], marks: [{ type: "strong" }] });
+    else nodes.push({ type: "text", text: m[3], marks: [{ type: "link", attrs: { href: m[4] } }] });
+    pos = m.index + m[0].length;
+  }
+  if (pos < text.length) nodes.push({ type: "text", text: text.slice(pos) });
+  return nodes.filter(n => n.text);
+}
+// ADF forbids an empty text node, so anything that renders to nothing gets a space.
+const some = c => (c.length ? c : [{ type: "text", text: " " }]);
+const para = t => { const c = inline(t); return c.length ? { type: "paragraph", content: c } : { type: "paragraph" }; };
+
+const RULE = /^(-{3,}|\*{3,}|_{3,})$/;
+const HEAD = /^(#{1,6})\s+(.*)$/;
+const TASK = /^\s*[-*+]\s+\[([ xX~!])\]\s+(.*)$/;
+const BULL = /^\s*[-*+]\s+(.*)$/;
+const ORD  = /^\s*\d+[.)]\s+(.*)$/;
+const startsBlock = l => {
+  const s = l.trim();
+  return !s || s.startsWith("```") || s.startsWith(">") || s.startsWith("|") ||
+    RULE.test(s) || HEAD.test(s) || TASK.test(l) || BULL.test(l) || ORD.test(l);
+};
+
+const lines = md.split("\n");
+const content = []; let i = 0, listId = 0;
+
+while (i < lines.length) {
+  const line = lines[i], s = line.trim();
+
+  if (s.startsWith("```")) {
+    const lang = s.slice(3).trim(); i++;
+    const buf = [];
+    while (i < lines.length && !lines[i].trim().startsWith("```")) buf.push(lines[i++]);
+    i++;
+    const node = { type: "codeBlock" };
+    if (lang) node.attrs = { language: lang };
+    if (buf.length) node.content = [{ type: "text", text: buf.join("\n") }];
+    content.push(node); continue;
+  }
+
+  if (RULE.test(s)) { content.push({ type: "rule" }); i++; continue; }
+
+  const h = HEAD.exec(s);
+  if (h) {
+    content.push({ type: "heading", attrs: { level: h[1].length }, content: some(inline(h[2])) });
+    i++; continue;
+  }
+
+  // An ADF table is a deep nested structure and these templates ship none;
+  // keep a hand-added one aligned in a code block instead of flattening its
+  // pipes into prose.
+  if (s.startsWith("|")) {
+    const buf = [];
+    while (i < lines.length && lines[i].trim().startsWith("|")) buf.push(lines[i++].replace(/\s+$/, ""));
+    content.push({ type: "codeBlock", content: [{ type: "text", text: buf.join("\n") }] });
+    continue;
+  }
+
+  if (TASK.test(line)) {
+    const items = [];
+    while (i < lines.length && TASK.test(lines[i])) {
+      const t = TASK.exec(lines[i++]);
+      items.push({
+        type: "taskItem",
+        attrs: { localId: "t" + listId + "-" + items.length, state: /[xX]/.test(t[1]) ? "DONE" : "TODO" },
+        content: some(inline(t[2])),
+      });
+    }
+    content.push({ type: "taskList", attrs: { localId: "l" + listId }, content: items });
+    listId++; continue;
+  }
+
+  if (BULL.test(line)) {
+    const items = [];
+    while (i < lines.length && BULL.test(lines[i]) && !TASK.test(lines[i]))
+      items.push({ type: "listItem", content: [para(BULL.exec(lines[i++])[1])] });
+    content.push({ type: "bulletList", content: items }); continue;
+  }
+
+  if (ORD.test(line)) {
+    const items = [];
+    while (i < lines.length && ORD.test(lines[i]))
+      items.push({ type: "listItem", content: [para(ORD.exec(lines[i++])[1])] });
+    content.push({ type: "orderedList", content: items }); continue;
+  }
+
+  if (s.startsWith(">")) {
+    const buf = [];
+    while (i < lines.length && lines[i].trim().startsWith(">")) buf.push(lines[i++].replace(/^\s*>\s?/, ""));
+    content.push({ type: "blockquote", content: [para(buf.filter(b => b.trim()).join(" "))] });
+    continue;
+  }
+
+  if (!s) { i++; continue; }
+
+  const buf = [];
+  while (i < lines.length && lines[i].trim() && !startsBlock(lines[i])) buf.push(lines[i++].trim());
+  content.push(para(buf.join(" ")));
+}
+
+process.stdout.write(JSON.stringify({
+  type: "doc", version: 1,
+  content: content.length ? content : [{ type: "paragraph" }],
+}));
+' "$ADF_SOURCE_LIMIT"
+}
+
+# Without node there is no renderer, so degrade to the flat document rather
+# than failing the sync outright.
+build_adf_description() {
+  local md="$1"
+  if command -v node >/dev/null 2>&1; then
+    printf '%s' "$md" | adf_render_markdown
+  else
+    build_adf_doc "$md"
+  fi
+}
+
 save_issue_key() {
   local key="$1" url="$2"
   local status_file="$CHANGE_DIR/status.md"
@@ -178,43 +381,370 @@ save_issue_key() {
   fi
 }
 
-# ─── Main ─────────────────────────────────────────────────────────────────────
+# ─── More REST verbs ──────────────────────────────────────────────────────────
+# All three pipe any JSON body via stdin, for the same reason jiraapi_post does.
 
-main() {
+jiraapi_get() {
+  local path="$1"
+  curl -sf -X GET "${JIRA_URL}/rest/api/3/${path}" \
+    -u "${JIRA_EMAIL}:${JIRA_TOKEN}" \
+    -H "Accept: application/json"
+}
+
+jiraapi_put() {
+  local path="$1" data="$2"
+  printf '%s' "$data" | curl -sf -X PUT "${JIRA_URL}/rest/api/3/${path}" \
+    -u "${JIRA_EMAIL}:${JIRA_TOKEN}" \
+    -H "Accept: application/json" \
+    -H "Content-Type: application/json" \
+    --data-binary @-
+}
+
+# ─── Jira Agile API (sprints, boards) ─────────────────────────────────────────
+# Sprints live on /rest/agile/1.0, not /rest/api/3 — a different base path, so
+# these cannot reuse jiraapi_get/jiraapi_post.
+
+jiraagile_get() {
+  local path="$1"
+  curl -sf -X GET "${JIRA_URL}/rest/agile/1.0/${path}" \
+    -u "${JIRA_EMAIL}:${JIRA_TOKEN}" \
+    -H "Accept: application/json"
+}
+
+jiraagile_post() {
+  local path="$1" data="$2"
+  printf '%s' "$data" | curl -sf -X POST "${JIRA_URL}/rest/agile/1.0/${path}" \
+    -u "${JIRA_EMAIL}:${JIRA_TOKEN}" \
+    -H "Accept: application/json" \
+    -H "Content-Type: application/json" \
+    --data-binary @-
+}
+
+# Print the first numeric "id" in a board/sprint list response, preferring an
+# entry whose "type" is scrum — a project can back both a Scrum and a Kanban
+# board, and only the Scrum one has sprints. Empty when the list has none.
+first_id_preferring_scrum() {
+  if command -v node >/dev/null 2>&1; then
+    node -e '
+let data;
+try { data = JSON.parse(require("fs").readFileSync(0, "utf8")); } catch (e) { process.exit(1); }
+const values = data.values || [];
+const pick = values.find(v => v.type === "scrum") || values[0];
+if (pick && pick.id != null) { process.stdout.write(String(pick.id)); process.exit(0); }
+process.exit(1);
+' 2>/dev/null || true
+    return
+  fi
+  # No node: the list is ordered, so the first id is the first entry's.
+  grep -oE '"id":[0-9]+' | head -1 | grep -oE '[0-9]+' || true
+}
+
+# Add issue $1 to the project's active sprint.
+#
+# Never fatal, for the same reason do_transition isn't: a Kanban project, a
+# Scrum project between sprints, or a token without Agile scope should still
+# get its issue, description and status transitions. It just won't appear in a
+# sprint board's columns — which is what the warning says.
+add_to_active_sprint() {
+  local key="$1" boards board_id sprints sprint_id
+
+  boards="$(jiraagile_get "board?projectKeyOrId=${JIRA_PROJECT}" 2>/dev/null || true)"
+  board_id="$(printf '%s' "$boards" | first_id_preferring_scrum)"
+  if [[ -z "$board_id" ]]; then
+    echo "WARNING: no board found for project ${JIRA_PROJECT} — ${key} will not appear on a sprint board." >&2
+    return 0
+  fi
+
+  sprints="$(jiraagile_get "board/${board_id}/sprint?state=active" 2>/dev/null || true)"
+  sprint_id="$(printf '%s' "$sprints" | first_id_preferring_scrum)"
+  if [[ -z "$sprint_id" ]]; then
+    echo "WARNING: board ${board_id} has no active sprint — ${key} stays in the Backlog view until one starts." >&2
+    return 0
+  fi
+
+  if jiraagile_post "sprint/${sprint_id}/issue" "$(printf '{"issues":["%s"]}' "$key")" >/dev/null 2>&1; then
+    echo "Added ${key} to active sprint ${sprint_id}"
+  else
+    echo "WARNING: could not add ${key} to sprint ${sprint_id} — it stays in the Backlog view." >&2
+  fi
+}
+
+# ─── Assignment ───────────────────────────────────────────────────────────────
+
+# The accountId the API token belongs to. Jira Cloud assigns by accountId only —
+# an email address or display name is rejected. Empty when the lookup fails;
+# callers treat that as "leave it unassigned" rather than as an error.
+resolve_my_account_id() {
+  local resp
+  resp="$(jiraapi_get "myself" 2>/dev/null || true)"
+  [[ -n "$resp" ]] || return 0
+  if command -v node >/dev/null 2>&1; then
+    printf '%s' "$resp" | node -e '
+let d;
+try { d = JSON.parse(require("fs").readFileSync(0, "utf8")); } catch (e) { process.exit(1); }
+if (d.accountId) { process.stdout.write(String(d.accountId)); process.exit(0); }
+process.exit(1);
+' 2>/dev/null || true
+    return
+  fi
+  printf '%s' "$resp" | grep -oE '"accountId":"[^"]*"' | head -1 | cut -d'"' -f4 || true
+}
+
+# Assign issue $1 to the account the API token belongs to.
+#
+# Never fatal, for the same reason the sprint attach isn't: an issue that exists
+# unassigned beats a sync that died partway through. Deliberately NOT called
+# from 'update' — a card reassigned to someone else on the board must not be
+# yanked back on the next description sync.
+assign_to_token_account() {
+  local key="$1" account_id
+  account_id="$(resolve_my_account_id)"
+  if [[ -z "$account_id" ]]; then
+    echo "WARNING: could not resolve the authenticated account — ${key} stays unassigned." >&2
+    return 0
+  fi
+  if jiraapi_put "issue/${key}/assignee" "$(printf '{"accountId":"%s"}' "$account_id")" >/dev/null 2>&1; then
+    echo "Assigned ${key} to the authenticated account"
+  else
+    echo "WARNING: could not assign ${key} — it stays unassigned." >&2
+  fi
+}
+
+# ─── Change-local state ───────────────────────────────────────────────────────
+
+# The recorded issue key, or empty. status.md is the source of truth, not Jira:
+# the same rule create's idempotency guard follows.
+existing_issue_key() {
+  [[ -f "$STATUS_FILE" ]] || return 0
+  grep -m1 'Jira Issue' "$STATUS_FILE" 2>/dev/null \
+    | grep -oE '\[[A-Z][A-Z0-9_]*-[0-9]+\]' | head -1 | tr -d '[]' || true
+}
+
+require_issue_key() {
+  local key
+  key="$(existing_issue_key)"
+  [[ -n "$key" ]] || die "No Jira issue recorded for '$CHANGE_NAME' — run: specclaw-jira-issue create $SPECCLAW_DIR $CHANGE_NAME"
+  printf '%s' "$key"
+}
+
+# Rendered task checklist, or empty when there are no tasks yet.
+build_task_checklist() {
+  local tasks_file="$CHANGE_DIR/tasks.md"
+  [[ -f "$tasks_file" ]] || return 0
+  # Only real task lines: the template's `- [ ] \`T<n>\` — <title>` legend entry
+  # is excluded by requiring a digit in the id.
+  local lines
+  # shellcheck disable=SC2016  # `$` is a grep anchor here, not a shell expansion
+  lines="$(grep -E '^- \[[ x~!]\] `T[0-9]+`' "$tasks_file" 2>/dev/null || true)"
+  [[ -n "$lines" ]] || return 0
+  local total complete
+  total="$(printf '%s\n' "$lines" | grep -c '' || true)"
+  complete="$(printf '%s\n' "$lines" | grep -c '^- \[x\]' || true)"
+  printf '\n\n--- Tasks (%s/%s complete) ---\n\n%s\n' "$complete" "$total" "$lines"
+}
+
+# Description = proposal + spec + the live task checklist.
+build_full_body() {
+  printf '%s%s' "$(build_issue_body)" "$(build_task_checklist)"
+}
+
+# ─── Board transitions ────────────────────────────────────────────────────────
+
+# Status names a Jira project might use for each lifecycle phase, best fit
+# first. Matched case-insensitively against BOTH the transition's own name
+# ("Start Progress") and the status it lands on ("In Progress") — projects name
+# one or the other, and rarely the one you expect.
+transition_candidates() {
+  case "$1" in
+    plan)   printf '%s\n' "Selected for Development" "Ready for Development" "Ready" "Planned" "To Do" "Open" ;;
+    build)  printf '%s\n' "In Progress" "Start Progress" "In Development" "Doing" ;;
+    verify) printf '%s\n' "In Review" "Code Review" "Ready for Review" "Review" "In Testing" "Testing" "QA" ;;
+    done)   printf '%s\n' "Done" "Closed" "Resolved" "Complete" ;;
+    *)      return 1 ;;
+  esac
+}
+
+# The issue's current status name, or empty. The status object precedes its
+# nested statusCategory, so the first "name" after it is the one we want.
+current_status() {
+  jiraapi_get "issue/$1?fields=status" 2>/dev/null \
+    | grep -oE '"status":\{.*' \
+    | grep -oE '"name":"[^"]*"' | head -1 | cut -d'"' -f4 || true
+}
+
+# Print "<id><TAB><status name>" for the first candidate the issue's workflow
+# actually offers; exit 1 when it offers none.
+resolve_transition() {
+  if command -v node >/dev/null 2>&1; then
+    node -e '
+let data;
+try { data = JSON.parse(require("fs").readFileSync(0, "utf8")); } catch (e) { process.exit(1); }
+for (const want of process.argv.slice(1).map(a => a.toLowerCase())) {
+  for (const t of data.transitions || []) {
+    const to = t.to || {};
+    if (String(t.name || "").toLowerCase() === want || String(to.name || "").toLowerCase() === want) {
+      process.stdout.write((t.id || "") + "\t" + (to.name || t.name || ""));
+      process.exit(0);
+    }
+  }
+}
+process.exit(1);
+' "$@"
+    return
+  fi
+
+  # No node: the pre-existing line-oriented scan. Splitting on `}` puts each
+  # transition's id ahead of its names in the same chunk.
+  local blob name id
+  blob="$(cat)"
+  for name in "$@"; do
+    id="$(printf '%s' "$blob" | tr '}' '\n' | grep -i "\"name\":\"${name}\"" \
+      | grep -oE '"id":"[0-9]+"' | head -1 | grep -oE '[0-9]+' || true)"
+    if [[ -n "$id" ]]; then
+      printf '%s\t%s' "$id" "$name"
+      return 0
+    fi
+  done
+  return 1
+}
+
+# Move the issue to the status this lifecycle phase implies. Never fatal: a
+# project whose workflow has no matching transition still gets its description
+# and comments, it just does not move on the board.
+do_transition() {
+  local phase="$1"
+  local candidates=()
+  while IFS= read -r c; do candidates+=("$c"); done < <(transition_candidates "$phase")
+  [[ ${#candidates[@]} -gt 0 ]] || die "Unknown transition phase: '$phase' (want plan|build|verify|done)"
+
+  local key; key="$(require_issue_key)"
+
+  # Already parked there? Jira drops the self-transition from the list, so
+  # checking first keeps a re-run of build or verify quiet instead of warning
+  # about a workflow that is behaving correctly.
+  local now c
+  now="$(current_status "$key")"
+  if [[ -n "$now" ]]; then
+    for c in "${candidates[@]}"; do
+      if [[ "$(printf '%s' "$c" | tr '[:upper:]' '[:lower:]')" == "$(printf '%s' "$now" | tr '[:upper:]' '[:lower:]')" ]]; then
+        echo "${key} already ${now}"
+        return 0
+      fi
+    done
+  fi
+
+  local transitions
+  transitions="$(jiraapi_get "issue/${key}/transitions")" \
+    || die "Could not read transitions for ${key}"
+
+  local resolved
+  resolved="$(printf '%s' "$transitions" | resolve_transition "${candidates[@]}" || true)"
+
+  if [[ -z "$resolved" ]]; then
+    local available
+    available="$(printf '%s' "$transitions" | grep -oE '"name":"[^"]*"' | cut -d'"' -f4 | sort -u | tr '\n' ' ')"
+    echo "WARNING: no '${phase}' transition for ${key} (tried: ${candidates[*]})." >&2
+    echo "         Available: ${available:-none}. Move it in Jira, or add the name to transition_candidates." >&2
+    return 0
+  fi
+
+  local id="${resolved%%$'\t'*}" to="${resolved#*$'\t'}"
+  jiraapi_post "issue/${key}/transitions" "$(printf '{"transition":{"id":"%s"}}' "$id")" >/dev/null \
+    || die "Jira transition failed for ${key} → ${to} (id ${id})"
+  echo "Moved ${key} → ${to}"
+}
+
+# ─── Subcommands ──────────────────────────────────────────────────────────────
+
+cmd_create() {
   [[ -f "$CHANGE_DIR/proposal.md" ]] || die "proposal.md not found — run: specclaw propose first"
 
-  # Skip if issue already exists
-  if [[ -f "$CHANGE_DIR/status.md" ]] && grep -q "Jira Issue" "$CHANGE_DIR/status.md" 2>/dev/null; then
-    local existing
-    existing="$(grep "Jira Issue" "$CHANGE_DIR/status.md" | head -1)"
-    echo "WARNING: Jira issue already exists for this change: $existing" >&2
+  if [[ -n "$(existing_issue_key)" ]]; then
+    echo "WARNING: Jira issue already exists for this change: $(grep -m1 'Jira Issue' "$STATUS_FILE")" >&2
     exit 0
   fi
 
   local summary body issue_type
   summary="$(build_issue_summary)"
-  body="$(build_issue_body)"
+  body="$(build_full_body)"
   issue_type="$(get_issue_type)"
 
-  local summary_json adf_desc
+  local summary_json adf_desc payload
   summary_json="$(echo "$summary" | json_escape)"
-  adf_desc="$(build_adf_doc "$body")"
-
-  local payload
+  adf_desc="$(build_adf_description "$body")"
   payload=$(printf '{"fields":{"project":{"key":"%s"},"summary":%s,"description":%s,"issuetype":{"name":"%s"}}}' \
     "$JIRA_PROJECT" "$summary_json" "$adf_desc" "$issue_type")
 
   echo "Creating Jira issue: $summary"
-  local response
+  local response issue_key
   response="$(jiraapi_post "issue" "$payload")"
-
-  local issue_key
   issue_key="$(echo "$response" | grep -o '"key":"[^"]*"' | head -1 | cut -d'"' -f4)"
   [[ -n "$issue_key" ]] || die "Failed to parse issue key from Jira response"
 
   local issue_url="${JIRA_URL}/browse/${issue_key}"
   save_issue_key "$issue_key" "$issue_url"
   echo "✅ Jira issue created: ${issue_key} — ${issue_url}"
+
+  add_to_active_sprint "$issue_key"
+  assign_to_token_account "$issue_key"
 }
 
-main
+cmd_update() {
+  local key; key="$(require_issue_key)"
+  local summary_json adf_desc payload
+  # The summary is rewritten alongside the description for the same reason the
+  # description is: proposal.md is the source of truth. It also repairs cards
+  # created before build_issue_summary preferred the H1.
+  # printf, not echo: a trailing newline would land inside the JSON string.
+  summary_json="$(printf '%s' "$(build_issue_summary)" | json_escape)"
+  adf_desc="$(build_adf_description "$(build_full_body)")"
+  payload=$(printf '{"fields":{"summary":%s,"description":%s}}' "$summary_json" "$adf_desc")
+
+  jiraapi_put "issue/${key}" "$payload" >/dev/null \
+    || die "Jira update failed for ${key}"
+
+  local counts
+  counts="$(build_task_checklist | grep -oE '\([0-9]+/[0-9]+ complete\)' | head -1 || true)"
+  echo "Updated ${key} ${counts:-(no tasks yet)}"
+}
+
+cmd_comment() {
+  local text="${EXTRA_ARGS[0]:-}"
+  [[ -n "$text" ]] || die "Missing comment text. Usage: specclaw-jira-issue comment <specclaw_dir> <change> \"<text>\""
+
+  local key; key="$(require_issue_key)"
+  local adf payload
+  adf="$(build_adf_doc "$text")"
+  payload=$(printf '{"body":%s}' "$adf")
+
+  jiraapi_post "issue/${key}/comment" "$payload" >/dev/null \
+    || die "Jira comment failed for ${key}"
+  echo "Commented on ${key}"
+}
+
+cmd_close() {
+  do_transition "done"
+}
+
+cmd_transition() {
+  local phase="${EXTRA_ARGS[0]:-}"
+  [[ -n "$phase" ]] || die "Missing phase. Usage: specclaw-jira-issue transition <specclaw_dir> <change> <plan|build|verify|done>"
+  do_transition "$phase"
+}
+
+cmd_sprint() {
+  local key; key="$(require_issue_key)"
+  add_to_active_sprint "$key"
+}
+
+# ─── Dispatch ─────────────────────────────────────────────────────────────────
+
+case "$SUBCMD" in
+  create)  cmd_create ;;
+  update)  cmd_update ;;
+  comment) cmd_comment ;;
+  transition) cmd_transition ;;
+  sprint)  cmd_sprint ;;
+  close)   cmd_close ;;
+  *)       die "Unknown subcommand: $SUBCMD" ;;
+esac
