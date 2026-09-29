@@ -84,6 +84,27 @@ Technology, level, source, and **what that means for their time** — brief / pr
 Call out the ratio: *"five of eight at (a)/(b), which is why briefs go one-per-task rather than as a
 reading pile."*
 
+### Step 3.5 — Offer a syllabus guide (opt-in)
+
+```bash
+specclaw-teach .specclaw syllabus        # ask (default) | always | never
+```
+
+If it prints `ask` and any technology is rated (a) or (b), ask once with `AskUserQuestion`:
+**"Generate a syllabus guide?"** One chapter per concept, with a diagram, worked examples,
+verified articles and videos, and self-check questions, written to
+`specclaw-teach .specclaw syllabus-path` (default `docs/syllabus/`) so it can be published.
+Options: **Yes, generate it** / **No, briefs only**. `always` skips the question; `never` skips
+the step.
+
+On yes, generate it now following `references/syllabus.md`. **Verify every link and video in
+this session**, since a dead or invented link is worse than none. Then continue to Step 4 and
+link each Learn item to its chapter. On no, continue as usual. The offer is made once per
+assessment; don't repeat it.
+
+This is the one document teaching mode writes ahead of the work, and only because the learner
+asked. Build-time briefs still happen at the task and link to the chapter rather than repeat it.
+
 ### Step 4 — Generate the learning plan
 ```bash
 specclaw-teach .specclaw plan-path      # canonical location
@@ -122,6 +143,17 @@ Don't end with a menu. End with **one concrete opening move**, and say what it o
 
 Name the first thing, why it's first, what teaching it opens with, and the exact words to reply.
 "Approve the plan or tell me what to change" is a menu, not a suggestion.
+
+## Syllabus on demand
+
+`/specclaw:teach syllabus` generates (or regenerates) the syllabus guide from the current level map,
+without re-running the assessment. Recipe, structure and verification rules:
+`references/syllabus.md`.
+
+```bash
+specclaw-teach .specclaw syllabus always   # ask | always | never
+specclaw-teach .specclaw syllabus-path     # where it is written
+```
 
 ## Toggle
 

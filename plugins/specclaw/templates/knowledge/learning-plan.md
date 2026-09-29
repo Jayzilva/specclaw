@@ -23,6 +23,8 @@ them — an inflated level silently denies them teaching they'd have wanted.
 
 ## 2. Learn — concept briefs queued
 
+> Syllabus guide: `<syllabus path>/index.md` (if generated). Link each item to its chapter.
+
 One per technology rated **(a)** or **(b)**, delivered **immediately before** the task that needs it,
 never in a batch up front. 3–4 minutes each: the problem it solves → mental model and where the
 analogy breaks → 3–5 primitives → real numbers → the failure mode → what it costs.

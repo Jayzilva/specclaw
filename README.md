@@ -202,6 +202,12 @@ boilerplate teaches nothing, choosing between designs with the costs visible is 
 artifact at a time** — documents are written at the step that needs them, never as a reading pile up
 front, and every reply ends with exactly one next action.
 
+**Syllabus guide (opt-in).** After the level map, teaching mode offers once to write a syllabus:
+one chapter per concept you rated (a) or (b), each with a Mermaid diagram, worked examples,
+common mistakes, self-check questions, and articles and videos verified in that session. It goes
+to `docs/syllabus/` (`teach.syllabus_dir`), ready for GitHub Pages or any docs site.
+`teach.syllabus: ask | always | never`; run `/specclaw:teach syllabus` to regenerate it.
+
 **No cheatsheet library by design.** Concept briefs are generated from the recipe in
 `references/teaching-mode.md` and cached per project under `.specclaw/knowledge/briefs/`. A file per
 technology is a coverage promise no plugin can keep, and static files go stale while model knowledge

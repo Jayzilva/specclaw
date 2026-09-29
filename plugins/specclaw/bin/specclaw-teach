@@ -11,6 +11,8 @@ Usage:
   specclaw-teach <specclaw_dir> level <technology> <a|b|c|d> [self|assumed]
   specclaw-teach <specclaw_dir> levels
   specclaw-teach <specclaw_dir> plan-path
+  specclaw-teach <specclaw_dir> syllabus [ask|always|never]
+  specclaw-teach <specclaw_dir> syllabus-path
   specclaw-teach <specclaw_dir> <change_name> log <kind> "<detail>"
   specclaw-teach <specclaw_dir> <change_name> --list
 
@@ -25,6 +27,12 @@ Modes:
                     assumed - inferred; MUST be confirmed before it is trusted
   levels          Show the learner profile
   plan-path       Print the canonical path for the learning plan
+  syllabus        With no argument, print the syllabus mode. With one, set it:
+                    ask    - offer a syllabus guide after the assessment (default)
+                    always - generate it after every assessment without asking
+                    never  - never offer one
+  syllabus-path   Print the syllabus directory (teach.syllabus_dir, default
+                  docs/syllabus), resolved against the project root
   log             Append an entry to a change's teaching.md
   --list          Show a change's teaching record
 
@@ -56,6 +64,8 @@ VALID_KINDS="brief decision prediction checkpoint debrief"
 VALID_LEVELS="a b c d"
 VALID_DEPTHS="minimal brief full"
 VALID_SOURCES="self assumed"
+VALID_SYLLABUS="ask always never"
+PROJECT_ROOT="$(cd "$SPECCLAW_DIR/.." 2>/dev/null && pwd || echo "$SPECCLAW_DIR/..")"
 PLAN_FILE="$KNOWLEDGE_DIR/learning-plan.md"
 
 # Read a scalar from the `teach:` block of config.yaml. Absent block or key -> default.
@@ -93,6 +103,18 @@ teach:
   depth: "brief"       # minimal | brief | full
   gate_builds: true    # pause before each build wave for an unfamiliar technology
 EOF
+  fi
+  # A config written before a key existed has no line to rewrite: add it right under `teach:`.
+  if [[ "$(read_teach_key "$key" __absent__)" == "__absent__" ]]; then
+    awk -v k="$key" -v v="$value" '
+      { print }
+      /^teach:[[:space:]]*$/ && !done { print "  " k ": " v; done=1 }
+    ' "$CONFIG_FILE" > "$CONFIG_FILE.tmp" && mv "$CONFIG_FILE.tmp" "$CONFIG_FILE" || {
+      rm -f "$CONFIG_FILE.tmp"
+      echo "Error: could not add teach.$key" >&2
+      exit 1
+    }
+    return
   fi
   awk -v k="$key" -v v="$value" '
     /^teach:[[:space:]]*$/ { print; inblock=1; next }
@@ -155,10 +177,12 @@ CMD="${1:-}"
 
 case "$CMD" in
   status)
-    printf '{"enabled":%s,"depth":"%s","gate_builds":%s,"profile":"%s"}\n' \
+    printf '{"enabled":%s,"depth":"%s","gate_builds":%s,"syllabus":"%s","syllabus_dir":"%s","profile":"%s"}\n' \
       "$(read_teach_key enabled false)" \
       "$(read_teach_key depth brief)" \
       "$(read_teach_key gate_builds true)" \
+      "$(read_teach_key syllabus ask)" \
+      "$(read_teach_key syllabus_dir docs/syllabus)" \
       "$PROFILE_FILE"
     ;;
 
@@ -216,6 +240,25 @@ case "$CMD" in
   plan-path)
     mkdir -p "$KNOWLEDGE_DIR"
     echo "$PLAN_FILE"
+    ;;
+
+  # The syllabus is an opt-in, human-facing guide generated from the level map. It lives in the
+  # project (so it can be published, e.g. to GitHub Pages), never in the plugin.
+  syllabus)
+    mode="${2:-}"
+    if [[ -z "$mode" ]]; then
+      read_teach_key syllabus ask
+    else
+      grep -qw -- "$mode" <<<"$VALID_SYLLABUS" || { echo "Error: syllabus mode must be one of: $VALID_SYLLABUS" >&2; exit 1; }
+      set_teach_key syllabus "\"$mode\""
+      echo "syllabus mode: $mode"
+    fi
+    ;;
+
+  syllabus-path)
+    dir="$(read_teach_key syllabus_dir docs/syllabus)"
+    [[ "$dir" = /* ]] || dir="$PROJECT_ROOT/$dir"
+    echo "$dir"
     ;;
 
   *)
