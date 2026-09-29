@@ -1,11 +1,11 @@
 {
-  "name": "chan4lk",
+  "name": "jayzilva-specclaw",
   "owner": {
     "name": "Chandima Ranaweera",
     "email": "chan4lk@gmail.com",
     "url": "https://github.com/chan4lk"
   },
-  "description": "Claude Code plugins by chan4lk.",
+  "description": "Fork of chan4lk/specclaw with teaching mode.",
   "plugins": [
     {
       "name": "specclaw",

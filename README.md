@@ -2,6 +2,18 @@
 
 # 🦞 SpecClaw
 
+> **Fork note (Jayzilva/specclaw).** This fork tracks `chan4lk/specclaw` main and adds opt-in
+> **teaching mode** (`/specclaw:teach`). Its marketplace is named `jayzilva-specclaw` so it can sit
+> beside the upstream install:
+>
+> ```
+> /plugin marketplace add Jayzilva/specclaw
+> /plugin install specclaw@jayzilva-specclaw
+> ```
+>
+> Disable `specclaw@chan4lk` in the same project to avoid duplicate `/specclaw:*` commands.
+
+
 ### _"I have a proposal."_
 
 **Spec-driven development for Claude Code and Codex.** Turn a plain-English idea into merged, production-ready code through a fully automated SDLC.
