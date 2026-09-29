@@ -1,5 +1,5 @@
 ---
-description: Turn teaching mode on or off, record what the human already knows, and generate on-demand concept briefs. When teach mode is enabled, propose/plan/build/verify explain before implementing and surface design choices as decisions for the human instead of deciding silently. Use when a user wants to learn the technologies while a change is built, or asks to be walked through rather than handed finished code.
+description: Toggle teaching mode, record what the human already knows, and generate concept briefs so propose/plan/build/verify explain and hand design choices to the human. Use when a user wants to learn the stack while a change is built, not just receive finished code.
 ---
 
 # specclaw teach
