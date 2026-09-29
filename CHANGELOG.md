@@ -4,6 +4,31 @@ All notable changes to specclaw are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres
 to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased] — teaching mode: syllabus guide (fork: Jayzilva/specclaw)
+
+### Added
+- **Syllabus guide (opt-in).** After the teaching assessment shows the level map,
+  `/specclaw:teach` offers once to generate a study guide: one chapter per
+  technology rated (a) or (b), each with why-it-matters-here, a mental model, a
+  Mermaid diagram, core primitives in the project's own stack, a worked example,
+  common mistakes, self-check questions with collapsed answers, and curated
+  official docs, articles and videos. It is written into the project
+  (`teach.syllabus_dir`, default `docs/syllabus/`) so it can be committed and
+  published to GitHub Pages or any docs site. `/specclaw:teach syllabus`
+  regenerates it on demand.
+- **Resources are verified, never recalled.** Every article is fetched and every
+  YouTube video is looked up through oEmbed in the same session, using the real
+  title and channel. Without network access the chapter is written without its
+  resource list, and the index says so.
+- **It never breaks the one-artifact rule silently.** `teach.syllabus: ask`
+  (default) asks once; `always` skips the question; `never` suppresses the offer.
+  Build-time briefs still happen at the task and link to the chapter.
+- `specclaw-teach syllabus [ask|always|never]` and `specclaw-teach syllabus-path`;
+  `status` now reports `syllabus` and `syllabus_dir`. Setting a key that an older
+  config lacks now adds it under `teach:` instead of failing.
+- `references/syllabus.md` (recipe, structure, verification rules, checklist) and
+  `tests/run-teach-tests.sh`, registered in CI.
+
 ## [Unreleased] — teaching mode (fork: Jayzilva/specclaw)
 
 ### Added

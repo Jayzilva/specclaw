@@ -202,6 +202,13 @@ specclaw-teach .specclaw <change> log debrief "<summary>"
 
 ---
 
+## Syllabus guide (opt-in)
+
+After the level map, the learner may ask for a syllabus: one chapter per (a)/(b) concept, with
+diagrams, worked examples, verified resources and self-checks, written into the project so it can
+be published. It is offered once (`teach.syllabus: ask`), never generated unasked, and never
+replaces build-time briefs. Full recipe: `references/syllabus.md`.
+
 ## Anti-patterns
 
 | Anti-pattern | Why it fails | Instead |

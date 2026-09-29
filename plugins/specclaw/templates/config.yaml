@@ -183,6 +183,8 @@ teach:
                         #   brief   - + 3-min concept brief for tech rated a/b
                         #   full    - + prediction beforeevery measurement, debrief at pr
   gate_builds: true     # pause before a build wave using an unfamiliar technology
+  syllabus: "ask"       # ask | always | never - offer a syllabus guide after the assessment
+  syllabus_dir: "docs/syllabus"   # where the guide is written (project-relative; publishable)
 
 # Workflow enforcement
 workflow:
