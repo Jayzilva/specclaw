@@ -1,19 +1,6 @@
 <div align="center">
 
 # 🦞 SpecClaw
-
-> **Fork note (Jayzilva/specclaw).** This fork tracks `chan4lk/specclaw` main and adds opt-in
-> **teaching mode** (`/specclaw:teach`). Its marketplace is named `jayzilva-specclaw` so it can sit
-> beside the upstream install:
->
-> ```
-> /plugin marketplace add Jayzilva/specclaw
-> /plugin install specclaw@jayzilva-specclaw
-> ```
->
-> Disable `specclaw@chan4lk` in the same project to avoid duplicate `/specclaw:*` commands.
-
-
 ### _"I have a proposal."_
 
 **Spec-driven development for Claude Code and Codex.** Turn a plain-English idea into merged, production-ready code through a fully automated SDLC.
@@ -28,6 +15,18 @@
 [![PRs welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](CONTRIBUTING.md)
 
 </div>
+
+> **Fork note (Jayzilva/specclaw).** This fork tracks `chan4lk/specclaw` main and adds opt-in
+> **teaching mode** (`/specclaw:teach`). Its marketplace is named `jayzilva-specclaw` so it can sit
+> beside the upstream install:
+>
+> ```
+> /plugin marketplace add Jayzilva/specclaw
+> /plugin install specclaw@jayzilva-specclaw
+> ```
+>
+> Disable `specclaw@chan4lk` in the same project to avoid duplicate `/specclaw:*` commands.
+
 
 Just say **"I have a proposal"** — SpecClaw manages the full lifecycle of a code change: propose → plan → build → verify → pr. It writes structured proposals, specs, designs, and ordered task lists into your project, then drives implementation through the lifecycle with full traceability from requirement to merged PR.
 
